@@ -341,7 +341,7 @@ void TioBleTask(void *pvParameters)
 }
 
 uint32_t
-tio_ble_init(tio_context_t *ctx)
+tio_ble_init(tio_ble_context_t *ctx)
 {
     gTioBleCtx = ctx;
     ns_ble_pre_init();

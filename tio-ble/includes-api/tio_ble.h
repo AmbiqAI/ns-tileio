@@ -27,7 +27,7 @@ typedef struct {
     pfnSlotUpdate slot_update_cb;
 } tio_ble_context_t;
 
-uint32_t tio_ble_init(tio_context_t *ctx);
+uint32_t tio_ble_init(tio_ble_context_t *ctx);
 void tio_ble_send_slot_data(uint8_t slot, uint8_t slot_type, const uint8_t *data, uint32_t length);
 void tio_ble_send_uio_state(const uint8_t *data, uint32_t length);
 

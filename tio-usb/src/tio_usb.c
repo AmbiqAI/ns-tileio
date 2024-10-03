@@ -16,6 +16,9 @@
 #include "vendor_device.h"
 #include "usb_descriptors.h"
 
+#include "ringbuffer.h"
+#include "tio_usb.h"
+
 #define TIO_USB_VENDOR_ID 0xCAFE
 #define TIO_USB_PRODUCT_ID 0x0001
 #define TIO_USB_PACKET_LEN 256
@@ -38,7 +41,7 @@
 
 static uint8_t tioDeviceId[6];
 static char tioSerialId[13];
-static tio_usb_context_t *gTioCtx = NULL;
+// static tio_usb_context_t *g_tio_usb_ctx = NULL;
 
 
 static uint8_t tioRxBuffer[TIO_USB_RX_BUFSIZE] = {0};
@@ -175,7 +178,7 @@ tio_usb_validate_packet(const uint8_t *buffer, uint32_t length)
 static void
 tio_usb_receive_handler(const uint8_t *buffer, uint32_t length, void *args)
 {
-    tio_context_t *ctx = (tio_context_t *)args;
+    tio_usb_context_t *ctx = (tio_usb_context_t *)args;
     ringbuffer_push(&tioRxRingBuffer, (void *)buffer, length);
     uint8_t slotFrame[TIO_USB_PACKET_LEN];
     uint32_t skip = 0;
@@ -223,7 +226,7 @@ tio_usb_receive_handler(const uint8_t *buffer, uint32_t length, void *args)
  * @param length Data length
  * @return uint32_t
  */
-static uint32_t
+uint32_t
 tio_usb_send_slot_data(uint8_t slot, uint8_t slot_type, const uint8_t *data, uint32_t length)
 {
     if (length > TIO_USB_DATA_LEN)
@@ -263,7 +266,7 @@ tio_usb_send_uio_state(const uint8_t *data, uint32_t length)
 }
 
 uint32_t
-tio_usb_init(tio_context_t *ctx)
+tio_usb_init(tio_usb_context_t *ctx)
 {
     webusb_register_raw_cb(tio_usb_receive_handler, ctx);
 
