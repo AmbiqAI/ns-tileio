@@ -221,7 +221,7 @@ tio_usb_receive_handler(const uint8_t *buffer, uint32_t length, void *args)
  *    STOP: 1 byte      [0xAA]
  *
  * @param slot Slot number (0-3)
- * @param slot_type Slot type (0 - signal, 1 - metric)
+ * @param slot_type Slot type (0 - signal, 1 - metric, 2 - uio)
  * @param data Slot data (max 240 bytes)
  * @param length Data length
  * @return uint32_t
