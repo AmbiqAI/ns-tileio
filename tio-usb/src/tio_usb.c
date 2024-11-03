@@ -21,7 +21,6 @@
 
 #define TIO_USB_VENDOR_ID 0xCAFE
 #define TIO_USB_PRODUCT_ID 0x0001
-#define TIO_USB_PACKET_LEN 256
 #define TIO_USB_START_IDX 0
 #define TIO_USB_START_VAL 0x55
 #define TIO_USB_SLOT_IDX 1
@@ -41,7 +40,6 @@
 
 static uint8_t tioDeviceId[6];
 static char tioSerialId[13];
-// static tio_usb_context_t *g_tio_usb_ctx = NULL;
 
 
 static uint8_t tioRxBuffer[TIO_USB_RX_BUFSIZE] = {0};
@@ -69,10 +67,14 @@ static ns_usb_config_t tioWebUsbConfig = {
     .service_cb = NULL};
 
 
+/**
+ * @brief Get the device ID
+ *
+ * @param deviceId
+ */
 static void
 tio_get_device_id(uint8_t *deviceId)
 {
-
     am_hal_mcuctrl_device_t device;
     am_hal_mcuctrl_info_get(AM_HAL_MCUCTRL_INFO_DEVICEID, &device);
     // DeviceID formed by ChipID1 (32 bits) and ChipID0 (8-23 bits).
@@ -82,6 +84,13 @@ tio_get_device_id(uint8_t *deviceId)
     deviceId[5] = (device.ui32ChipID0 >> 16) & 0xFF;
 }
 
+/**
+ * @brief Convert device ID to serial ID
+ *
+ * @param deviceId
+ * @param serialId
+ * @param len
+ */
 static void
 tio_device_id_to_serial_id(uint8_t *deviceId, char *serialId, size_t len)
 {
@@ -102,6 +111,13 @@ tio_device_id_to_serial_id(uint8_t *deviceId, char *serialId, size_t len)
     }
 }
 
+/**
+ * @brief Compute CRC16 on packet data
+ *
+ * @param data Packet data
+ * @param length Packet length
+ * @return uint16_t
+ */
 static uint16_t
 tio_compute_crc16(const uint8_t *data, uint32_t length)
 {
@@ -132,8 +148,15 @@ tio_compute_crc16(const uint8_t *data, uint32_t length)
     return (uint16_t)crc;
 }
 
+/**
+ * @brief Validate the USB packet is correct
+ *
+ * @param packet USB packet
+ * @param length Packet length
+ * @return uint32_t
+ */
 static uint32_t
-tio_usb_validate_packet(const uint8_t *buffer, uint32_t length)
+tio_usb_validate_packet(const uint8_t *packet, uint32_t length)
 {
     // Decode the packet
     if (length != TIO_USB_PACKET_LEN)
@@ -141,17 +164,15 @@ tio_usb_validate_packet(const uint8_t *buffer, uint32_t length)
         ns_lp_printf("Invalid packet length\n");
         return 1;
     }
-    uint8_t start = buffer[TIO_USB_START_IDX];
-    uint8_t slot = buffer[TIO_USB_SLOT_IDX];
-    uint8_t slotType = buffer[TIO_USB_TYPE_IDX];
+    uint8_t start = packet[TIO_USB_START_IDX];
+    uint8_t slot = packet[TIO_USB_SLOT_IDX];
+    uint8_t slotType = packet[TIO_USB_TYPE_IDX];
 
-    uint16_t dlen = (buffer[TIO_USB_DLEN_IDX + 1] << 8) | buffer[TIO_USB_DLEN_IDX];
-    uint16_t crc = (buffer[TIO_USB_CRC_IDX + 1] << 8) | buffer[TIO_USB_CRC_IDX];
+    uint16_t dlen = (packet[TIO_USB_DLEN_IDX + 1] << 8) | packet[TIO_USB_DLEN_IDX];
+    uint16_t crc = (packet[TIO_USB_CRC_IDX + 1] << 8) | packet[TIO_USB_CRC_IDX];
 
-    uint16_t stop = buffer[TIO_USB_STOP_IDX];
-    uint16_t computedCrc = tio_compute_crc16(buffer + TIO_USB_DLEN_IDX, dlen + TIO_USB_DLEN_LEN);
-            // Received packet: 85 0 2 8 35902 170
-    ns_lp_printf("Received packet: %d %d %d %d %d %d\n", start, slot, slotType, dlen, crc, stop);
+    uint16_t stop = packet[TIO_USB_STOP_IDX];
+    uint16_t computedCrc = tio_compute_crc16(packet + TIO_USB_DLEN_IDX, dlen + TIO_USB_DLEN_LEN);
     if (start != TIO_USB_START_VAL || stop != TIO_USB_STOP_VAL)
     {
         ns_lp_printf("Invalid start/stop byte %lu %lu\n", start, stop);
@@ -175,6 +196,13 @@ tio_usb_validate_packet(const uint8_t *buffer, uint32_t length)
     return 0;
 }
 
+/**
+ * @brief Callback for USB receive
+ *
+ * @param buffer Rx buffer
+ * @param length Buffer length
+ * @param args Tileio USB context
+ */
 static void
 tio_usb_receive_handler(const uint8_t *buffer, uint32_t length, void *args)
 {
@@ -210,16 +238,76 @@ tio_usb_receive_handler(const uint8_t *buffer, uint32_t length, void *args)
 }
 
 /**
- * @brief Send slot data over USB
- * A USB slot frame is 256 bytes long w/ fields:
- *   START: 1 byte      [0x55]
- *    SLOT: 1 byte      [0 - ch0, 1 - ch1, 2 - ch2, 3 - ch3]
- *   STYPE: 1 byte      [0 - signal, 1 - metric, 2 - uio]
- *  LENGTH: 2 bytes     [0 - 248]
- *    DATA: 248 bytes   [...]
- *     CRC: 2 bytes     [CRC16]
- *    STOP: 1 byte      [0xAA]
+ * @brief Pack slot data into USB frame
+ * @param slot Slot number (0-3)
+ * @param slot_type Slot type (0 - signal, 1 - metric, 2 - uio)
+ * @param data Slot data (max 240 bytes)
+ * @param length Data length
+ * @return uint32_t
+ */
+uint32_t
+tio_usb_pack_slot_data(uint8_t slot, uint8_t slot_type, const uint8_t *data, uint32_t length, uint8_t *packet)
+{
+    if (length > TIO_USB_DATA_LEN)
+    {
+        ns_lp_printf("Data length exceeds limit\n");
+        return 1;
+    }
+    packet[TIO_USB_START_IDX] = TIO_USB_START_VAL;
+    packet[TIO_USB_SLOT_IDX] = slot;
+    packet[TIO_USB_TYPE_IDX] = slot_type;
+    packet[TIO_USB_DLEN_IDX] = length & 0xFF;
+    packet[TIO_USB_DLEN_IDX + 1] = (length >> 8) & 0xFF;
+    memcpy(packet + TIO_USB_DATA_IDX, data, length);
+    // CRC on data length and data
+    uint16_t crc = tio_compute_crc16(packet + TIO_USB_DLEN_IDX, length + TIO_USB_DLEN_LEN);
+    packet[TIO_USB_CRC_IDX] = crc & 0xFF;
+    packet[TIO_USB_CRC_IDX + 1] = (crc >> 8) & 0xFF;
+    packet[TIO_USB_STOP_IDX] = TIO_USB_STOP_VAL;
+    return 0;
+}
+
+/**
+ * @brief Check if USB is mounted and has space to send a packet
+ * @return uint32_t
+ */
+uint32_t
+tio_usb_tx_available()
+{
+    if (!tud_vendor_mounted()) {
+        return 0;
+    }
+    if (tud_vendor_write_available() < TIO_USB_PACKET_LEN) {
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * @brief Send packet buffer over USB
  *
+ * @param packet USB packet
+ * @param length Packet length
+ * @return uint32_t
+ */
+uint32_t
+tio_usb_send_slot_packet(uint8_t *packet, uint32_t length)
+{
+    if (length != TIO_USB_PACKET_LEN)
+    {
+        ns_lp_printf("Invalid packet length\n");
+        return 1;
+    }
+    if (!tio_usb_tx_available()) {
+        return 1;
+    }
+    webusb_send_data(packet, 256);
+    return 0;
+}
+
+
+/**
+ * @brief Pack and send slot data
  * @param slot Slot number (0-3)
  * @param slot_type Slot type (0 - signal, 1 - metric, 2 - uio)
  * @param data Slot data (max 240 bytes)
@@ -234,14 +322,6 @@ tio_usb_send_slot_data(uint8_t slot, uint8_t slot_type, const uint8_t *data, uin
         ns_lp_printf("Data length exceeds limit\n");
         return 1;
     }
-    if (!tud_vendor_mounted()) {
-        ns_lp_printf("USB not mounted\n");
-        return 1;
-    }
-    // while (tud_vendor_write_available() < TIO_USB_PACKET_LEN) {
-    //     ns_delay_us(200);
-    //     ns_lp_printf(".");
-    // }
     // Send the signal data for given slot
     uint8_t buffer[TIO_USB_PACKET_LEN] = {0};
     buffer[TIO_USB_START_IDX] = TIO_USB_START_VAL;
@@ -255,16 +335,30 @@ tio_usb_send_slot_data(uint8_t slot, uint8_t slot_type, const uint8_t *data, uin
     buffer[TIO_USB_CRC_IDX] = crc & 0xFF;
     buffer[TIO_USB_CRC_IDX + 1] = (crc >> 8) & 0xFF;
     buffer[TIO_USB_STOP_IDX] = TIO_USB_STOP_VAL;
-    webusb_send_data(buffer, 256);
-    return 0;
+    return tio_usb_send_slot_packet(buffer, TIO_USB_PACKET_LEN);
 }
 
+/**
+ * @brief Pack and send UIO state
+ *
+ * @param data
+ * @param length
+ * @return uint32_t
+ */
 uint32_t
 tio_usb_send_uio_state(const uint8_t *data, uint32_t length)
 {
-    return tio_usb_send_slot_data(0, 2, data, length);
+    uint8_t packet[TIO_USB_PACKET_LEN];
+    tio_usb_pack_slot_data(0, 2, data, length, packet);
+    return tio_usb_send_slot_packet(packet, TIO_USB_PACKET_LEN);
 }
 
+/**
+ * @brief Initialize the USB system
+ *
+ * @param ctx Tileio USB context
+ * @return uint32_t
+ */
 uint32_t
 tio_usb_init(tio_usb_context_t *ctx)
 {
