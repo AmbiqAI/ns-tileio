@@ -172,12 +172,17 @@ tio_usb_validate_packet(const uint8_t *packet, uint32_t length)
     uint16_t crc = (packet[TIO_USB_CRC_IDX + 1] << 8) | packet[TIO_USB_CRC_IDX];
 
     uint16_t stop = packet[TIO_USB_STOP_IDX];
-    uint16_t computedCrc = tio_compute_crc16(packet + TIO_USB_DLEN_IDX, dlen + TIO_USB_DLEN_LEN);
     if (start != TIO_USB_START_VAL || stop != TIO_USB_STOP_VAL)
     {
         ns_lp_printf("Invalid start/stop byte %lu %lu\n", start, stop);
         return 1;
     }
+    if (dlen > TIO_USB_DATA_LEN)
+    {
+        ns_lp_printf("Invalid data length %u\n", dlen);
+        return 1;
+    }
+    uint16_t computedCrc = tio_compute_crc16(packet + TIO_USB_DLEN_IDX, dlen + TIO_USB_DLEN_LEN);
     if (crc != computedCrc)
     {
         ns_lp_printf("Invalid CRC %x %x\n", crc, computedCrc);
@@ -253,6 +258,7 @@ tio_usb_pack_slot_data(uint8_t slot, uint8_t slot_type, const uint8_t *data, uin
         ns_lp_printf("Data length exceeds limit\n");
         return 1;
     }
+    memset(packet, 0, TIO_USB_PACKET_LEN);
     packet[TIO_USB_START_IDX] = TIO_USB_START_VAL;
     packet[TIO_USB_SLOT_IDX] = slot;
     packet[TIO_USB_TYPE_IDX] = slot_type;
